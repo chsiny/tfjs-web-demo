@@ -93,7 +93,7 @@
         });
 
         try {
-          const output = await model.executeAsync({ input: inputTensor });
+          const output = await model.execute({ input: inputTensor });
           const [typeLogits, manuLogits, condLogits] = tf.split(output, [16, 79, 5], 1);
 
           const predType = typeLogits.argMax(1).dataSync()[0];

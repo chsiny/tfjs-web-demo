@@ -1,64 +1,82 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <title>Multi-Task Image Classifier</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0"></script>
-  <style>
-    body { font-family: sans-serif; text-align: center; margin-top: 40px; }
-    #output { margin-top: 20px; font-size: 1.2em; }
-    img { max-width: 200px; margin-top: 20px; }
-  </style>
-</head>
-<body>
-  <h1>Upload Image for Prediction</h1>
-  <input type="file" accept="image/*" id="fileInput" />
-  <div><img id="preview" /></div>
-  <div id="output"></div>
+  <head>
+    <title>Multi-Task Image Classifier</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0"></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
+        margin-top: 40px;
+      }
+      #output {
+        margin-top: 20px;
+        font-size: 1.2em;
+      }
+      img {
+        max-width: 200px;
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Upload Image for Prediction</h1>
+    <input type="file" accept="image/*" id="fileInput" />
+    <div><img id="preview" /></div>
+    <div id="output"></div>
 
-  <script>
-    let model;
+    <script>
+      let model;
 
-    // Load model on page load
-    window.onload = async () => {
-      model = await tf.loadGraphModel('./tfjs_model/model.json');
-    };
+      // Load model on page load
+      window.onload = async () => {
+        model = await tf.loadGraphModel("./tfjs_model/model.json");
+      };
 
-    document.getElementById('fileInput').addEventListener('change', async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
+      document
+        .getElementById("fileInput")
+        .addEventListener("change", async (event) => {
+          const file = event.target.files[0];
+          if (!file) return;
 
-      const imgElement = document.getElementById('preview');
-      imgElement.src = URL.createObjectURL(file);
+          const imgElement = document.getElementById("preview");
+          imgElement.src = URL.createObjectURL(file);
 
-      const img = new Image();
-      img.src = imgElement.src;
-      await img.decode();
+          const img = new Image();
+          img.src = imgElement.src;
+          await img.decode();
 
-      // Preprocess: resize, to tensor, normalize
-      const inputTensor = tf.tidy(() => {
-        return tf.browser.fromPixels(img)
-          .resizeBilinear([224, 224])
-          .toFloat()
-          .div(255.0)
-          .expandDims(0); // shape: [1, 224, 224, 3]
-      });
+          // Preprocess: resize, to tensor, normalize
+          const inputTensor = tf.tidy(() => {
+            return tf.browser
+              .fromPixels(img)
+              .resizeBilinear([224, 224])
+              .toFloat()
+              .div(255.0)
+              .expandDims(0) // [1, 224, 224, 3]
+              .transpose([0, 3, 1, 2]); // [1, 3, 224, 224]
+          });
 
-      const output = model.predict(inputTensor);
-      const [typeLogits, manuLogits, condLogits] = tf.split(output, [16, 79, 5], 1);
+          const output = model.predict(inputTensor);
+          const [typeLogits, manuLogits, condLogits] = tf.split(
+            output,
+            [16, 79, 5],
+            1
+          );
 
-      const predType = typeLogits.argMax(1).dataSync()[0];
-      const predManu = manuLogits.argMax(1).dataSync()[0];
-      const predCond = condLogits.argMax(1).dataSync()[0];
+          const predType = typeLogits.argMax(1).dataSync()[0];
+          const predManu = manuLogits.argMax(1).dataSync()[0];
+          const predCond = condLogits.argMax(1).dataSync()[0];
 
-      document.getElementById('output').innerHTML = `
+          document.getElementById("output").innerHTML = `
         <strong>Prediction:</strong><br/>
         Asset Type: ${predType}<br/>
         Manufacturer: ${predManu}<br/>
         Condition: ${predCond}
       `;
 
-      tf.dispose([output, inputTensor, typeLogits, manuLogits, condLogits]);
-    });
-  </script>
-</body>
+          tf.dispose([output, inputTensor, typeLogits, manuLogits, condLogits]);
+        });
+    </script>
+  </body>
 </html>

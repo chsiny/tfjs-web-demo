@@ -26,11 +26,23 @@
     <div id="output"></div>
 
     <script>
-      let model;
+      let model,
+        labels = {};
 
-      // Load model on page load
+      async function loadLabels() {
+        const [types, manus, conds] = await Promise.all([
+          fetch("./asset_types.json").then((res) => res.json()),
+          fetch("./manufacturers.json").then((res) => res.json()),
+          fetch("./conditions.json").then((res) => res.json()),
+        ]);
+        labels.assetTypes = types;
+        labels.manufacturers = manus;
+        labels.conditions = conds;
+      }
+
       window.onload = async () => {
         model = await tf.loadGraphModel("./tfjs_model/model.json");
+        await loadLabels();
       };
 
       document
@@ -69,11 +81,11 @@
           const predCond = condLogits.argMax(1).dataSync()[0];
 
           document.getElementById("output").innerHTML = `
-        <strong>Prediction:</strong><br/>
-        Asset Type: ${predType}<br/>
-        Manufacturer: ${predManu}<br/>
-        Condition: ${predCond}
-      `;
+  <strong>Prediction:</strong><br/>
+  Asset Type: ${labels.assetTypes[predType]} (${predType})<br/>
+  Manufacturer: ${labels.manufacturers[predManu]} (${predManu})<br/>
+  Condition: ${labels.conditions[predCond]} (${predCond})
+`;
 
           tf.dispose([output, inputTensor, typeLogits, manuLogits, condLogits]);
         });

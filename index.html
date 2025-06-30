@@ -67,6 +67,9 @@
       let modelReady = false;
 
       window.onload = async () => {
+        // ✅ Set WebGL to use float32 precision (prevent TF.js from reducing to float16)
+        tf.env().set('WEBGL_FORCE_F16_TEXTURES', false);
+        
         model = await tf.loadGraphModel("./tfjs_model/model.json");
         await loadLabels();
         modelReady = true;

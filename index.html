@@ -40,6 +40,18 @@
         max-width: 200px;
         margin-top: 20px;
       }
+      #debug {
+        margin-top: 20px;
+        font-family: monospace;
+        font-size: 0.9em;
+        background: #f5f5f5;
+        padding: 10px;
+        border-radius: 5px;
+        text-align: left;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+      }
     </style>
   </head>
   <body>
@@ -48,33 +60,116 @@
     <div><img id="preview" /></div>
     <p id="status"></p>
     <div id="output"></div>
+    <div id="debug"></div>
 
     <script>
       let model,
         labels = {};
 
       async function loadLabels() {
-        const [types, manus, conds] = await Promise.all([
-          fetch("./asset_types.json").then((res) => res.json()),
-          fetch("./manufacturers.json").then((res) => res.json()),
-          fetch("./conditions.json").then((res) => res.json()),
-        ]);
-        labels.assetTypes = types;
-        labels.manufacturers = manus;
-        labels.conditions = conds;
+        try {
+          const [types, manus, conds] = await Promise.all([
+            fetch("./asset_types.json").then((res) => res.json()),
+            fetch("./manufacturers.json").then((res) => res.json()),
+            fetch("./conditions.json").then((res) => res.json()),
+          ]);
+          labels.assetTypes = types;
+          labels.manufacturers = manus;
+          labels.conditions = conds;
+        } catch (error) {
+          console.warn("Could not load label files, using defaults");
+          // Create default labels if files don't exist
+          labels.assetTypes = Array.from({length: 16}, (_, i) => `Type_${i}`);
+          labels.manufacturers = Array.from({length: 79}, (_, i) => `Manufacturer_${i}`);
+          labels.conditions = Array.from({length: 5}, (_, i) => `Condition_${i}`);
+        }
       }
 
       let modelReady = false;
 
       window.onload = async () => {
-        // ✅ Set WebGL to use float32 precision (prevent TF.js from reducing to float16)
-        tf.env().set("WEBGL_FORCE_F16_TEXTURES", false);
-
-        model = await tf.loadGraphModel("./tfjs_model/model.json");
-        await loadLabels();
-        modelReady = true;
-        document.getElementById("fileInput").disabled = false;
+        try {
+          // Set WebGL to use float32 precision
+          tf.env().set("WEBGL_FORCE_F16_TEXTURES", false);
+          
+          model = await tf.loadGraphModel("./tfjs_model/model.json");
+          await loadLabels();
+          modelReady = true;
+          document.getElementById("fileInput").disabled = false;
+          document.getElementById("status").textContent = "Model loaded successfully!";
+        } catch (error) {
+          console.error("Error loading model:", error);
+          document.getElementById("status").textContent = "Error loading model. Check console for details.";
+        }
       };
+
+      function preprocessImage(img) {
+        return tf.tidy(() => {
+          // Step 1: Create canvas and resize using Canvas API (closer to PIL behavior)
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = 224;
+          canvas.height = 224;
+          
+          // Use high-quality smoothing (similar to PIL's LANCZOS/BILINEAR)
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          
+          // Draw resized image
+          ctx.drawImage(img, 0, 0, 224, 224);
+          
+          // Get raw pixels from original for debugging
+          const tempCanvas = document.createElement('canvas');
+          const tempCtx = tempCanvas.getContext('2d');
+          tempCanvas.width = img.width;
+          tempCanvas.height = img.height;
+          tempCtx.drawImage(img, 0, 0);
+          const originalImageData = tempCtx.getImageData(0, 0, img.width, img.height);
+          const rawPixels = Array.from(originalImageData.data.slice(0, 30)).filter((_, i) => i % 4 !== 3).slice(0, 10);
+          console.log("Raw pixels (first 10):", rawPixels);
+          
+          // Get resized pixels from canvas
+          const resizedImageData = ctx.getImageData(0, 0, 224, 224);
+          const resizedPixels = Array.from(resizedImageData.data.slice(0, 30)).filter((_, i) => i % 4 !== 3).slice(0, 10);
+          console.log("Canvas resized pixels (first 10):", resizedPixels);
+          
+          // Convert canvas to tensor
+          const pixels = tf.browser.fromPixels(canvas, 3);
+          console.log("Original image shape:", img.width + "x" + img.height);
+          console.log("Resized tensor shape:", pixels.shape);
+          
+          // Convert to float
+          const floatImg = pixels.toFloat();
+          
+          // Apply ImageNet normalization
+          // Mean: [0.485, 0.456, 0.406], Std: [0.229, 0.224, 0.225]
+          const mean = tf.tensor1d([0.485, 0.456, 0.406]).mul(255);
+          const std = tf.tensor1d([0.229, 0.224, 0.225]).mul(255);
+          
+          const normalized = floatImg.sub(mean).div(std);
+          console.log("Normalized tensor shape:", normalized.shape);
+          
+          // Get some normalized values for debugging
+          const normalizedPixels = normalized.slice([0, 0, 0], [1, 10, 3]).dataSync();
+          console.log("Normalized pixels (first 10):", Array.from(normalizedPixels).slice(0, 10));
+          
+          // Add batch dimension and transpose to NCHW format
+          const batched = normalized.expandDims(0); // [1, 224, 224, 3]
+          const transposed = batched.transpose([0, 3, 1, 2]); // [1, 3, 224, 224]
+          
+          console.log("Final tensor shape:", transposed.shape);
+          
+          // Clean up intermediate tensors
+          pixels.dispose();
+          floatImg.dispose();
+          normalized.dispose();
+          batched.dispose();
+          mean.dispose();
+          std.dispose();
+          
+          return transposed;
+        });
+      }
 
       document
         .getElementById("fileInput")
@@ -83,6 +178,7 @@
             alert("Model is still loading. Please wait...");
             return;
           }
+          
           const file = event.target.files[0];
           if (!file) return;
 
@@ -90,64 +186,97 @@
           const imgElement = document.getElementById("preview");
           const status = document.getElementById("status");
           const outputDiv = document.getElementById("output");
+          const debugDiv = document.getElementById("debug");
 
           fileInput.disabled = true;
-          status.innerHTML = `🔄 Predicting image: <em>${file.name}</em> <span class="spinner"></span>`;
+          status.innerHTML = `Predicting image: <em>${file.name}</em> <span class="spinner"></span>`;
           outputDiv.innerHTML = "";
-
-          imgElement.src = URL.createObjectURL(file);
-          const img = new Image();
-          img.src = imgElement.src;
-          await img.decode();
-
-          const inputTensor = tf.tidy(() => {
-            const mean = tf.tensor1d([0.485, 0.456, 0.406]).mul(255);
-            const std = tf.tensor1d([0.229, 0.224, 0.225]).mul(255);
-
-            return tf.browser
-              .fromPixels(img)
-              .resizeBilinear([224, 224])
-              .toFloat()
-              .sub(mean)
-              .div(std)
-              .expandDims(0) // [1, 224, 224, 3]
-              .transpose([0, 3, 1, 2]); // [1, 3, 224, 224]
-          });
+          debugDiv.innerHTML = "";
 
           try {
-            const output = await model.execute({ input: inputTensor });
-            console.log("Output shape:", output.shape);
-            const logits = await output.data(); // Get raw values from tensor
-            console.log("TFJS logits:", Array.from(logits)); // Print as array for comparison
+            // Create image element and wait for it to load
+            imgElement.src = URL.createObjectURL(file);
+            const img = new Image();
+            img.crossOrigin = "anonymous"; // Prevent CORS issues
+            img.src = imgElement.src;
+            
+            await new Promise((resolve, reject) => {
+              img.onload = resolve;
+              img.onerror = reject;
+            });
 
+            console.log(`Image loaded: ${img.width}x${img.height}`);
+            
+            // Preprocess the image
+            const inputTensor = preprocessImage(img);
+
+            // Run prediction
+            console.log("Running prediction...");
+            const output = await model.execute({ input: inputTensor });
+            console.log("Model output shape:", output.shape);
+            
+            const logits = await output.data();
+            console.log("Raw logits length:", logits.length);
+            console.log("Raw logits (first 20):", Array.from(logits).slice(0, 20));
+
+            // Split the output into three parts
             const [typeLogits, manuLogits, condLogits] = tf.split(
               output,
               [16, 79, 5],
               1
             );
 
-            const predType = tf.softmax(typeLogits).argMax(1).dataSync()[0];
-            const predManu = tf.softmax(manuLogits).argMax(1).dataSync()[0];
-            const predCond = tf.softmax(condLogits).argMax(1).dataSync()[0];
+            // Get predictions
+            const typePredTensor = tf.softmax(typeLogits).argMax(1);
+            const manuPredTensor = tf.softmax(manuLogits).argMax(1);
+            const condPredTensor = tf.softmax(condLogits).argMax(1);
+            
+            const predType = typePredTensor.dataSync()[0];
+            const predManu = manuPredTensor.dataSync()[0];
+            const predCond = condPredTensor.dataSync()[0];
+
+            // Get confidence scores
+            const typeProbs = await tf.softmax(typeLogits).data();
+            const manuProbs = await tf.softmax(manuLogits).data();
+            const condProbs = await tf.softmax(condLogits).data();
+            
+            const typeConf = typeProbs[predType];
+            const manuConf = manuProbs[predManu];
+            const condConf = condProbs[predCond];
 
             outputDiv.innerHTML = `
-            <strong>Prediction:</strong><br/>
-            Asset Type: ${labels.assetTypes[predType]} (${predType})<br/>
-            Manufacturer: ${labels.manufacturers[predManu]} (${predManu})<br/>
-            Condition: ${labels.conditions[predCond]} (${predCond})
-          `;
+              <strong>Prediction Results:</strong><br/>
+              <div style="text-align: left; max-width: 400px; margin: 20px auto;">
+                <div><strong>Asset Type:</strong> ${labels.assetTypes[predType]} (${predType}) - ${(typeConf * 100).toFixed(1)}%</div>
+                <div><strong>Manufacturer:</strong> ${labels.manufacturers[predManu]} (${predManu}) - ${(manuConf * 100).toFixed(1)}%</div>
+                <div><strong>Condition:</strong> ${labels.conditions[predCond]} (${predCond}) - ${(condConf * 100).toFixed(1)}%</div>
+              </div>
+            `;
 
-            status.textContent = "✅ Prediction complete!";
-            tf.dispose([
-              output,
-              inputTensor,
-              typeLogits,
-              manuLogits,
-              condLogits,
-            ]);
+            debugDiv.innerHTML = `
+              <strong>Debug Information:</strong><br/>
+              Original size: ${img.width}×${img.height}<br/>
+              Tensor shape: ${inputTensor.shape}<br/>
+              Output shape: ${output.shape}<br/>
+              Predictions: Type=${predType}, Manu=${predManu}, Cond=${predCond}
+            `;
+
+            status.textContent = "Prediction complete!";
+
+            // Clean up tensors
+            inputTensor.dispose();
+            output.dispose();
+            typeLogits.dispose();
+            manuLogits.dispose();
+            condLogits.dispose();
+            typePredTensor.dispose();
+            manuPredTensor.dispose();
+            condPredTensor.dispose();
+
           } catch (err) {
-            console.error(err);
-            status.textContent = "❌ Prediction failed.";
+            console.error("Prediction error:", err);
+            status.textContent = "Prediction failed. Check console for details.";
+            outputDiv.innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
           }
 
           fileInput.disabled = false;

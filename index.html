@@ -113,6 +113,7 @@
 
           try {
             const output = await model.execute({ input: inputTensor });
+            console.log("Output shape:", output.shape);
             const [typeLogits, manuLogits, condLogits] = tf.split(
               output,
               [16, 79, 5],

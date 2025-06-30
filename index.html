@@ -64,14 +64,22 @@
         labels.conditions = conds;
       }
 
+      let modelReady = false;
+
       window.onload = async () => {
         model = await tf.loadGraphModel("./tfjs_model/model.json");
         await loadLabels();
+        modelReady = true;
+        document.getElementById("fileInput").disabled = false;
       };
 
       document
         .getElementById("fileInput")
         .addEventListener("change", async (event) => {
+          if (!modelReady) {
+            alert("Model is still loading. Please wait...");
+            return;
+          }
           const file = event.target.files[0];
           if (!file) return;
 
@@ -90,14 +98,13 @@
           await img.decode();
 
           const inputTensor = tf.tidy(() => {
-            const mean = tf.tensor1d([0.485, 0.456, 0.406]);
-            const std = tf.tensor1d([0.229, 0.224, 0.225]);
+            const mean = tf.tensor1d([0.485, 0.456, 0.406]).mul(255);
+            const std = tf.tensor1d([0.229, 0.224, 0.225]).mul(255);
 
             return tf.browser
               .fromPixels(img)
               .resizeBilinear([224, 224])
               .toFloat()
-              .div(255.0)
               .sub(mean)
               .div(std)
               .expandDims(0) // [1, 224, 224, 3]

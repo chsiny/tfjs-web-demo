@@ -68,8 +68,8 @@
 
       window.onload = async () => {
         // ✅ Set WebGL to use float32 precision (prevent TF.js from reducing to float16)
-        tf.env().set('WEBGL_FORCE_F16_TEXTURES', false);
-        
+        tf.env().set("WEBGL_FORCE_F16_TEXTURES", false);
+
         model = await tf.loadGraphModel("./tfjs_model/model.json");
         await loadLabels();
         modelReady = true;
@@ -117,6 +117,9 @@
           try {
             const output = await model.execute({ input: inputTensor });
             console.log("Output shape:", output.shape);
+            const logits = await output.data(); // Get raw values from tensor
+            console.log("TFJS logits:", Array.from(logits)); // Print as array for comparison
+
             const [typeLogits, manuLogits, condLogits] = tf.split(
               output,
               [16, 79, 5],
